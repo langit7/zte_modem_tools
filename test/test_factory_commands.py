@@ -35,7 +35,7 @@ class FactoryCommandTests(unittest.TestCase):
 
         mode = webfac.factoryModeCommand("open").decode()
         mode_match = re.fullmatch(
-            r"FactoryMode\.gch\?time(\d+)&mode=2&user=fuckyou",
+            r"FactoryMode\.gch\?time(\d+)&mode=2&user=notused",
             mode,
         )
         self.assertIsNotNone(mode_match)

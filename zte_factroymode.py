@@ -235,7 +235,7 @@ class WebFacTelnet(WebFac):
         if self.auth_time is None:
             raise ValueError("new factory mode requires a completed authentication step")
         mode_time = SystemRandom().randint(self.auth_time, 999)
-        return f'FactoryMode.gch?time{mode_time}&mode=2&user=fuckyou'.encode()
+        return f'FactoryMode.gch?time{mode_time}&mode=2&user=notused'.encode()
 
 
 def dealFacAuth(Class: WebFac, ip, port, users, pws, new_method=False, selected_mac=None):
