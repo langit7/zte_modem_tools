@@ -1,5 +1,7 @@
 import re
+import io
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 from Crypto.Cipher import AES
 
@@ -22,6 +24,32 @@ class FakeSession:
 
 
 class FactoryCommandTests(unittest.TestCase):
+    def test_verbose_logs_sent_body_and_response(self):
+        webfac = WebFac("192.168.1.1", 80, "user", "pass", verbose=True)
+        webfac.S = FakeSession(FakeResponse(200, b"newrand=11"))
+
+        stderr = io.StringIO()
+        with patch("zte_factroymode.Random") as random_source, redirect_stderr(stderr):
+            random_source.return_value.randint.return_value = 7
+            self.assertEqual(2, webfac.sendSq())
+
+        output = stderr.getvalue()
+        self.assertIn("-> POST http://192.168.1.1:80/webFac", output)
+        self.assertIn("SendSq.gch?rand=7", output)
+        self.assertIn("<- HTTP 200", output)
+        self.assertIn("newrand=11", output)
+
+    def test_debug_output_is_disabled_by_default(self):
+        webfac = WebFac("192.168.1.1", 80, "user", "pass")
+        webfac.S = FakeSession(FakeResponse(200, b""))
+
+        stderr = io.StringIO()
+        with patch("zte_factroymode.Random") as random_source, redirect_stderr(stderr):
+            random_source.return_value.randint.return_value = 7
+            self.assertEqual(1, webfac.sendSq())
+
+        self.assertEqual("", stderr.getvalue())
+
     def test_request_factory_metadata_avoids_python_user_agent(self):
         webfac = WebFac("192.168.1.1", 8080, "user", "pass")
         self.assertNotIn("python", webfac.S.headers["User-Agent"].lower())

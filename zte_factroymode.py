@@ -3,6 +3,7 @@
 import requests
 import argparse
 import re
+import sys
 from random import Random, SystemRandom
 from Crypto.Cipher import AES
 
@@ -86,7 +87,7 @@ class WebFac:
     AES_KEY_POOL_NEW = AES_KEY_POOL_LATEST
 
     def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None,
-                 sendinfo_profile="rerand34") -> None:
+                 sendinfo_profile="rerand34", verbose=False) -> None:
         self.ip = ip
         self.port = port
         self.user = user
@@ -94,6 +95,7 @@ class WebFac:
         self.new_method = new_method
         self.client_mac = selected_mac
         self.sendinfo_profile = sendinfo_profile
+        self.verbose = verbose
         self.auth_time = None
         self.protocol_method = None
         self.cipher = None
@@ -115,14 +117,68 @@ class WebFac:
             "Referer": f"http://{self.ip}/login.html",
         })
 
+    def _debug(self, message):
+        if self.verbose:
+            print("[debug] %s" % message, file=sys.stderr)
+
+    def _request(self, method, path, data=None, plaintext=None):
+        """Send an HTTP request and, when requested, show both protocol and
+        wire representations.  Factory-mode requests after SendSq are AES
+        ciphertext, so the plaintext command is logged separately."""
+        url = f"http://{self.ip}:{self.port}{path}"
+        self._debug("-> %s %s" % (method, url))
+        if self.verbose:
+            self._debug("-> headers=%r" % dict(getattr(self.S, "headers", {})))
+        if self.verbose and plaintext is not None:
+            self._debug("-> plaintext=%r" % plaintext)
+        if self.verbose and data is not None:
+            wire = data.encode() if isinstance(data, str) else bytes(data)
+            self._debug("-> body (%d bytes) repr=%r hex=%s" % (
+                len(wire), wire, wire.hex()
+            ))
+        resp = self.S.request(method, url, data=data)
+        if self.verbose:
+            content = resp.content
+            self._debug("<- HTTP %d headers=%r" % (
+                resp.status_code, dict(getattr(resp, "headers", {}))
+            ))
+            self._debug("<- body (%d bytes) repr=%r hex=%s" % (
+                len(content), content, content.hex()
+            ))
+        return resp
+
+    def _post(self, path, data, plaintext=None):
+        # Keep using Session.post rather than Session.request so simple custom
+        # sessions used by callers and tests remain compatible.
+        url = f"http://{self.ip}:{self.port}{path}"
+        self._debug("-> POST %s" % url)
+        if self.verbose:
+            self._debug("-> headers=%r" % dict(getattr(self.S, "headers", {})))
+            if plaintext is not None:
+                self._debug("-> plaintext=%r" % plaintext)
+            wire = data.encode() if isinstance(data, str) else bytes(data)
+            self._debug("-> body (%d bytes) repr=%r hex=%s" % (
+                len(wire), wire, wire.hex()
+            ))
+        resp = self.S.post(url, data=data)
+        if self.verbose:
+            content = resp.content
+            self._debug("<- HTTP %d headers=%r" % (
+                resp.status_code, dict(getattr(resp, "headers", {}))
+            ))
+            self._debug("<- body (%d bytes) repr=%r hex=%s" % (
+                len(content), content, content.hex()
+            ))
+        return resp
+
     def reset(self):
         # active onu web service first, increase the chances of success
         try:
-            self.S.get(f"http://{self.ip}:{self.port}/")
+            resp = self._request("GET", "/")
         except Exception as e:
             print(e)
 
-        resp = self.S.post(f"http://{self.ip}:{self.port}/webFac", data='SendSq.gch')
+        resp = self._post('/webFac', 'SendSq.gch')
         # 400 means the stale session was reset; when the device is already in
         # a factory session it answers 200 with an empty body, equally fine.
         if resp.status_code == 400 or (resp.status_code == 200 and resp.text == ""):
@@ -131,7 +187,7 @@ class WebFac:
 
     def requestFactoryMode(self):
         try:
-            resp = self.S.post(f"http://{self.ip}:{self.port}/webFac", data='RequestFactoryMode.gch')
+            resp = self._post('/webFac', 'RequestFactoryMode.gch')
             return 200 <= resp.status_code < 300
         except requests.exceptions.ConnectionError:
             # The handler accepts this request without an HTTP body; the
@@ -158,7 +214,7 @@ class WebFac:
             # keeps the signed ARM normalization on its non-negative path.
             rand = Random().randint(0, 59)
 
-            resp = self.S.post(f"http://{self.ip}:{self.port}/webFac", data=f'SendSq.gch?rand={rand}\r\n')
+            resp = self._post('/webFac', f'SendSq.gch?rand={rand}\r\n')
             if resp.status_code != 200:
                 return False
 
@@ -224,8 +280,8 @@ class WebFac:
     def sendInfo(self):
         try:
             command = self.sendInfoCommand()
-            resp = self.S.post(f"http://{self.ip}:{self.port}/webFacEntry",
-                               data=self.cipher.encrypt(pad(command, 16)))
+            resp = self._post('/webFacEntry',
+                              self.cipher.encrypt(pad(command, 16)), command)
             # print(resp.status_code, repr(resp.text))
             if resp.status_code == 200:
                 return True
@@ -262,13 +318,13 @@ class WebFac:
     def checkLoginAuth(self):
         try:
             command = self.checkLoginAuthCommand()
-            resp = self.S.post(
-                f"http://{self.ip}:{self.port}/webFacEntry",
-                data=self.cipher.encrypt(
+            resp = self._post(
+                '/webFacEntry',
+                self.cipher.encrypt(
                     # httpd allocates a trailing NUL; only AES block alignment
                     # is required on the wire.
                     pad(command, 16)
-                ))
+                ), command)
             # print(repr(resp.text))
             if resp.status_code == 200:
                 # httpd incorrectly uses strlen on this ciphertext. Missing
@@ -280,6 +336,7 @@ class WebFac:
                     print("protocol error: truncated auth response")
                     return False
                 url = unpad(self.cipher.decrypt(ciphertext[:complete_length]), 16)
+                self._debug("<- decrypted response=%r" % url)
                 # resp should be "FactoryMode.gch"
                 if not url.startswith(b"FactoryMode.gch"):
                     print("protocol error: invalid auth response")
@@ -307,16 +364,18 @@ class WebFac:
 
 class WebFacSerial(WebFac):
     def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None,
-                 sendinfo_profile="rerand34") -> None:
-        super().__init__(ip, port, user, pw, new_method, selected_mac, sendinfo_profile)
+                 sendinfo_profile="rerand34", verbose=False) -> None:
+        super().__init__(ip, port, user, pw, new_method, selected_mac,
+                         sendinfo_profile, verbose)
 
     def serialSlience(self, action):
         try:
-            resp = self.S.post(
-                f"http://{self.ip}:{self.port}/webFacEntry",
-                data=self.cipher.encrypt(
-                    pad(f'SerialSlience.gch?action={action}'.encode(), 16)
-                ))
+            command = f'SerialSlience.gch?action={action}'.encode()
+            resp = self._post(
+                '/webFacEntry',
+                self.cipher.encrypt(
+                    pad(command, 16)
+                ), command)
             # print(repr(resp.text))
             if resp.status_code == 200:
                 return True
@@ -329,21 +388,22 @@ class WebFacSerial(WebFac):
 
 class WebFacTelnet(WebFac):
     def __init__(self, ip, port, user, pw, new_method=False, selected_mac=None,
-                 sendinfo_profile="rerand34") -> None:
-        super().__init__(ip, port, user, pw, new_method, selected_mac, sendinfo_profile)
+                 sendinfo_profile="rerand34", verbose=False) -> None:
+        super().__init__(ip, port, user, pw, new_method, selected_mac,
+                         sendinfo_profile, verbose)
 
     def factoryMode(self, action):
         try:
             command = self.factoryModeCommand(action)
-            resp = self.S.post(
-                f"http://{self.ip}:{self.port}/webFacEntry",
-                data=self.cipher.encrypt(pad(command, 16)))
+            resp = self._post('/webFacEntry',
+                              self.cipher.encrypt(pad(command, 16)), command)
             # print(repr(resp.text))
             if resp.status_code == 200:
                 if action == 'close' and not resp.content:
                     return True
                 # resp should be "FactoryModeAuth.gch?user=<telnetuser>&pass=<telnetpass>"
                 url = unpad(self.cipher.decrypt(resp.content), 16)
+                self._debug("<- decrypted response=%r" % url)
                 return url
             elif resp.status_code == 400:
                 print("protocol error")
@@ -369,12 +429,12 @@ class WebFacTelnet(WebFac):
 
 
 def dealFacAuth(Class: WebFac, ip, port, users, pws, new_method=False, selected_mac=None,
-                sendinfo_profile="rerand34"):
+                sendinfo_profile="rerand34", verbose=False):
     for user in users:
         for pw in pws:
             print(f"trying  user:\"{user}\" pass:\"{pw}\" ")
             webfac: WebFac = Class(
-                ip, port, user, pw, new_method, selected_mac, sendinfo_profile
+                ip, port, user, pw, new_method, selected_mac, sendinfo_profile, verbose
             )
             print("reset facTelnetSteps:")
             if not webfac.reset():
@@ -428,9 +488,10 @@ def dealFacAuth(Class: WebFac, ip, port, users, pws, new_method=False, selected_
 
 
 def dealSerial(ip, port, users, pws, action, new_method=False, selected_mac=None,
-               sendinfo_profile="rerand34"):
+               sendinfo_profile="rerand34", verbose=False):
     serial = dealFacAuth(
-        WebFacSerial, ip, port, users, pws, new_method, selected_mac, sendinfo_profile
+        WebFacSerial, ip, port, users, pws, new_method, selected_mac,
+        sendinfo_profile, verbose
     )
     if not serial:
         return
@@ -444,9 +505,10 @@ def dealSerial(ip, port, users, pws, action, new_method=False, selected_mac=None
 
 def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None,
                telnet_port=23, telnet=None, telnet_restart=False,
-               sendinfo_profile="rerand34"):
+               sendinfo_profile="rerand34", verbose=False):
     webfac = dealFacAuth(
-        WebFacTelnet, ip, port, users, pws, new_method, selected_mac, sendinfo_profile
+        WebFacTelnet, ip, port, users, pws, new_method, selected_mac,
+        sendinfo_profile, verbose
     )
     if not webfac:
         print('No Luck!')
@@ -540,6 +602,8 @@ def parseArgs():
     parser.add_argument('--port', help='router http port', type=int, default=80)
     parser.add_argument('--new', dest='new_method', action='store_true',
                         help='use version61/time-compatible authentication; webFac method is auto-detected')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='show HTTP commands, wire payloads, and responses for debugging')
     parser.add_argument('--sendinfo-profile', choices=['rerand34', 'rerand22'], default='rerand34',
                         help='method-3 proof profile: latest 34-word (info=34) or early 22-word (info=22)')
     mac_group = parser.add_mutually_exclusive_group()
@@ -578,11 +642,11 @@ def main():
     # print(args)
     if args.cmd == 'serial':
         dealSerial(args.ip, args.port, args.user, args.pw, args.action,
-                   args.new_method, selected_mac, args.sendinfo_profile)
+                   args.new_method, selected_mac, args.sendinfo_profile, args.verbose)
     elif args.cmd == 'telnet':
         dealTelnet(args.ip, args.port, args.user, args.pw, args.action,
                    args.new_method, selected_mac, args.tp,
-                   args.telnet, args.telnet_restart, args.sendinfo_profile)
+                   args.telnet, args.telnet_restart, args.sendinfo_profile, args.verbose)
 
 
 if __name__ == '__main__':

@@ -168,6 +168,20 @@ python3 zte_factroymode.py serial close
 
 ## Troubleshooting
 
+### Show request and response details
+
+Add `-v` or `--verbose` before the subcommand to print each HTTP request,
+plaintext factory command, encrypted wire payload, response status/body, and
+decrypted response:
+
+```bash
+python3 zte_factroymode.py -v telnet open
+```
+
+Debug output is written to standard error and can contain usernames,
+passwords, and temporary Telnet credentials. Avoid sharing it without first
+removing secrets.
+
 ### Authentication succeeds but Telnet does not open
 
 For F6201B firmware, the request must contain a suitable `Referer` and a
