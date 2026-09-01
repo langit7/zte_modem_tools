@@ -57,8 +57,8 @@ python .\zte_factroymode.py telnet
 
 ### Make Telnet persistent
 
-Permanent Telnet uses the configured Telnet credentials. It is allowed only
-when every `WLANBase.CountryCode` value is `198`.
+Permanent Telnet uses `root` / `Zte521`. It is allowed only when every
+`WLANBase.CountryCode` value is `198`.
 
 ```bash
 # Restart telnetd without rebooting.
@@ -87,10 +87,10 @@ Put options before `telnet` or `serial`.
 python3 zte_factroymode.py --ip 192.168.1.1 --port 8080 --tp 23 telnet
 
 # Try a specific factory-mode login.
-python3 zte_factroymode.py --user modem-admin --pass '<factory-password>' telnet
+python3 zte_factroymode.py --user CUAdmin --pass CUAdmin telnet
 
 # Provide the MAC address visible to the modem (especially on Windows).
-python3 zte_factroymode.py --mac 00:11:22:33:44:55 telnet
+python3 zte_factroymode.py --mac YOUR-MAC-ADDRESS telnet
 ```
 
 Newer firmware may bind authentication to the client MAC. On Linux, the tool
