@@ -83,6 +83,11 @@ Save the same credentials and reboot the device to apply them:
 python3 zte_factroymode.py --telnet-restart telnet open
 ```
 
+Some F6600P firmware does not list `telnetd` in `sendcmd -pc show`, so it
+cannot restart Telnet in place. For that firmware, use the rebooting command
+above. If the in-place command reports that `telnetd` was not found, the DB
+settings may already be saved; rerun with `--telnet-restart` to activate them.
+
 Permanent settings are written only after the tool successfully logs in with
 the temporary credentials.
 

@@ -120,6 +120,7 @@ class TelnetFlowTests(unittest.TestCase):
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 Max_Con_Num 99", joined)
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 InitSecLvl 3", joined)
         self.assertIn("sendcmd 1 DB save", joined)
+        self.assertNotIn("sendcmd 1 DB recsave", joined)
 
     def test_restart_telnetd_kills_parsed_pid(self):
         session = self._connect("root", "Zte521")

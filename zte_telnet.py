@@ -262,16 +262,18 @@ class Telnet:
             prefix + "CloseServerTime 9999999",
             prefix + "Lan_EnableAfterOlt 1",
             prefix + "InitSecLvl 3",
-            # save DB
+            # save DB; DB recsave is not available on every F6600P firmware.
             "sendcmd 1 DB save",
-            "sendcmd 1 DB recsave",
         ]
         for cmd in commands:
-            self._send_cmd(cmd)
             try:
-                self.wait_for(READ_TIMEOUT, *SHELL_PROMPTS)
+                output = self.run_output(cmd)
             except TelnetError as error:
                 raise TelnetError("command %r failed: %s" % (cmd, error))
+            lowered = output.lower()
+            error_words = ("access denied", "error", "failed", "invalid", "not found")
+            if any(word in lowered for word in error_words):
+                raise TelnetError("command %r returned an error: %s" % (cmd, output.strip()))
 
     def reboot(self):
         """Send the reboot command and block until the device closes the
@@ -291,7 +293,13 @@ class Telnet:
             out = self.run_output("sendcmd -pc show", READ_TIMEOUT)
         except TelnetError as error:
             raise TelnetError("could not read managed programs: %s" % error)
-        pid = _parse_telnetd_pid(out)
+        try:
+            pid = _parse_telnetd_pid(out)
+        except (RuntimeError, ValueError) as error:
+            raise TelnetError(
+                "%s; this firmware requires a reboot to apply permanent Telnet settings "
+                "(rerun with --telnet-restart)" % error
+            )
         self._send_cmd("sendcmd -pc kill %d" % pid)
         self.wait_for_close(RESTART_CLOSE_TIMEOUT)
 

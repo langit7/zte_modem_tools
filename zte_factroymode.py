@@ -569,7 +569,9 @@ def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot,
             print("restarting telnetd in place (no reboot)..")
             telnet_session.restart_telnetd()
     except (TelnetError, ValueError, RuntimeError) as error:
-        print(error)
+        print("permanent Telnet was not activated:", error)
+        if not reboot:
+            print("The settings may be saved; rerun with --telnet-restart to reboot the device.")
         return
     print("telnetd restarted, verifying permanent telnet..")
 
