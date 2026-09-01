@@ -12,13 +12,32 @@ detected automatically.
 
 ## Installation
 
-Python 3 and Linux are recommended. Linux is required for automatic
-route/interface MAC detection.
+Python 3 is supported on Linux and Windows. Linux can automatically detect the
+MAC address used by the route to the ONU/ONT. On Windows, use `--mac` whenever
+the device requires MAC-bound authentication.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+From PowerShell in this repository:
+
+```powershell
+Set-Location 'path\to\zte_modem_tools'
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+From Windows CMD:
+
+```bat
+cd /d path\to\zte_modem_tools
+py -3 -m venv .venv
+.venv\Scripts\activate.bat
+python -m pip install -r requirements.txt
 ```
 
 ## Open Telnet
@@ -29,6 +48,16 @@ verifies that the returned credentials work:
 
 ```bash
 python3 zte_factroymode.py telnet open
+```
+
+PowerShell or CMD, from the repository directory:
+
+```powershell
+python .\zte_factroymode.py telnet open
+```
+
+```bat
+python zte_factroymode.py telnet open
 ```
 
 `open` is optional, so this is equivalent:
@@ -109,7 +138,7 @@ list, preventing `telnet open` from being interpreted as more passwords.
 Newer firmware binds the factory-mode proof to the client MAC address visible
 to the ONU/ONT. The tool normally detects it from the route automatically.
 
-Select a Linux interface explicitly:
+On Linux, select an interface explicitly:
 
 ```bash
 python3 zte_factroymode.py --iface eth0 telnet open
@@ -124,6 +153,17 @@ python3 zte_factroymode.py --mac 00:11:22:33:44:55 telnet open
 `--mac` changes the proof payload only; it does not change or spoof the
 interface MAC. With a bridge, repeater, VM, Wi-Fi link, or routed connection,
 make sure this is the layer-2 address the ONU/ONT actually sees.
+
+On Windows, provide the MAC address explicitly. This works in both PowerShell
+and CMD and avoids platform-specific interface lookup:
+
+```powershell
+python .\zte_factroymode.py --new --mac 00:11:22:33:44:55 telnet open
+```
+
+```bat
+python zte_factroymode.py --new --mac 00:11:22:33:44:55 telnet open
+```
 
 ## F6201B and firmware compatibility
 
@@ -214,13 +254,29 @@ key material in `/etc/hardcode`:
 python3 zte_hardcode_dump.py /path/to/hardcode /path/to/hardcodefile/*
 ```
 
+The input may be a file, directory, or wildcard pattern. Wildcards are
+expanded by the script so the same form works in Windows CMD and PowerShell.
+For this checkout, use:
+
+PowerShell:
+
+```powershell
+python .\zte_hardcode_dump.py .\test\hardcode .\test\hardcodefile
+```
+
+CMD:
+
+```bat
+python zte_hardcode_dump.py test\hardcode test\hardcodefile
+```
+
 Each decrypted result is written beside its input file with a `.txt` suffix.
 For example, `webpri` produces `webpri.txt`.
 
 Run the included sample:
 
 ```bash
-python3 zte_hardcode_dump.py test/hardcode test/hardcodefile/*
+python3 zte_hardcode_dump.py test/hardcode test/hardcodefile
 ```
 
 ## Tests
@@ -229,6 +285,18 @@ The test suite uses Python's standard-library test runner:
 
 ```bash
 python3 -m unittest discover -s test -v
+```
+
+PowerShell:
+
+```powershell
+python -m unittest discover -s test -v
+```
+
+CMD:
+
+```bat
+python -m unittest discover -s test -v
 ```
 
 ## License and upstream project

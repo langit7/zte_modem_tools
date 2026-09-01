@@ -600,8 +600,8 @@ class FactoryArgumentParser(argparse.ArgumentParser):
         if message == 'the following arguments are required: cmd':
             message += (
                 '\n\nExample valid commands:'
-                '\n  python .\\zte_factroymode.py telnet open'
-                '\n  python .\\zte_factroymode.py serial open'
+                '\n  python zte_factroymode.py telnet open'
+                '\n  python zte_factroymode.py serial open'
             )
         super().error(message)
 

@@ -117,7 +117,7 @@ class TelnetFlowTests(unittest.TestCase):
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 TS_UPwd Zte521", joined)
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 TSLan_UName root", joined)
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 TSLan_UPwd Zte521", joined)
-        self.assertIn("sendcmd 1 DB set TelnetCfg 0 Max_Con_Num 3", joined)
+        self.assertIn("sendcmd 1 DB set TelnetCfg 0 Max_Con_Num 99", joined)
         self.assertIn("sendcmd 1 DB set TelnetCfg 0 InitSecLvl 3", joined)
         self.assertIn("sendcmd 1 DB save", joined)
 
