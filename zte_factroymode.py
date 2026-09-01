@@ -505,7 +505,8 @@ def dealSerial(ip, port, users, pws, action, new_method=False, selected_mac=None
 
 def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None,
                telnet_port=23, telnet=None, telnet_restart=False,
-               sendinfo_profile="rerand34", verbose=False):
+               sendinfo_profile="rerand34", verbose=False,
+               telnet_user="root", telnet_pass="Zte521"):
     webfac = dealFacAuth(
         WebFacTelnet, ip, port, users, pws, new_method, selected_mac,
         sendinfo_profile, verbose
@@ -544,29 +545,29 @@ def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None
         print("telnet verified, temp factory telnet is open")
 
         if telnet_restart:
-            apply_permanent_telnet(session, ip, telnet_port, reboot=True)
+            apply_permanent_telnet(session, ip, telnet_port, reboot=True,
+                                   username=telnet_user, password=telnet_pass)
         elif telnet:
-            apply_permanent_telnet(session, ip, telnet_port, reboot=False)
+            apply_permanent_telnet(session, ip, telnet_port, reboot=False,
+                                   username=telnet_user, password=telnet_pass)
     finally:
         session.close()
 
 
-def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot):
-    """Write the permanent telnet settings (user: root, pass: Zte521) on an
-    already logged-in temp session and apply them by either rebooting or
-    restarting telnetd in place through the program manager."""
+def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot,
+                           username="root", password="Zte521"):
+    """Write persistent Telnet settings and verify command authorization."""
     try:
-        telnet_session.solidify()
-        print("Permanent Telnet saved\r\nuser: root, pass: Zte521")
+        telnet_session.solidify(username, password)
+        print(f"Permanent Telnet saved\r\nuser: {username}, pass: {password}")
 
         if reboot:
             print("wait reboot..")
             telnet_session.reboot()
             print("device is rebooting")
-            return
-
-        print("restarting telnetd in place (no reboot)..")
-        telnet_session.restart_telnetd()
+        else:
+            print("restarting telnetd in place (no reboot)..")
+            telnet_session.restart_telnetd()
     except (TelnetError, ValueError, RuntimeError) as error:
         print(error)
         return
@@ -576,28 +577,46 @@ def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot):
     # than in the initial login before declaring the restart bad.
     verify = None
     try:
-        verify = Telnet.connect("root", "Zte521", ip, telnet_port,
-                                attempts=15, interval=2.0)
+        verify = Telnet.connect(username, password, ip, telnet_port,
+                                attempts=45 if reboot else 15, interval=2.0)
         verify.login()
+        output = verify.run_output("sendcmd 1 DB p TelnetCfg")
+        if "access denied" in output.lower():
+            raise TelnetError("Telnet login succeeded but shell commands are still denied")
     except (TelnetError, OSError) as error:
         print("permanent telnet verification failed:", error)
     else:
-        print("permanent telnet verified after in-place restart")
+        print("permanent telnet verified after reboot" if reboot
+              else "permanent telnet verified after in-place restart")
     finally:
         if verify:
             verify.close()
 
 
+class FactoryArgumentParser(argparse.ArgumentParser):
+    """Argument parser that gives a usable command when none is supplied."""
+
+    def error(self, message):
+        if message == 'the following arguments are required: cmd':
+            message += (
+                '\n\nExample valid commands:'
+                '\n  python .\\zte_factroymode.py telnet open'
+                '\n  python .\\zte_factroymode.py serial open'
+            )
+        super().error(message)
+
+
 def parseArgs():
-    parser = argparse.ArgumentParser(prog='zte_factroymode', epilog='https://github.com/douniwan5788/zte_modem_tools',
+    parser = FactoryArgumentParser(prog='zte_factroymode', epilog='https://github.com/douniwan5788/zte_modem_tools',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('--user', '-u', nargs='+', help='factorymode auth username', default=[
-                        'factorymode', "CMCCAdmin", "CUAdmin", "telecomadmin", "cqadmin",
-                        "user", "admin", "cuadmin", "lnadmin", "useradmin"])
+                        "admin", 'factorymode', "CMCCAdmin", "CUAdmin", "telecomadmin", "cqadmin",
+                        "user", "cuadmin", "lnadmin", "useradmin", "root"])
     parser.add_argument('--pass', '-p', metavar='PASS', dest='pw', nargs='+', help='factorymode auth password', default=[
-                        'nE%jA@5b', "aDm8H%MdA", "CUAdmin", "nE7jA%5m", "cqunicom",
-                        "1620@CTCC", "1620@CUcc", "admintelecom", "cuadmin", "lnadmin"])
+                         "Telkomdso123",'nE%jA@5b', "aDm8H%MdA", "CUAdmin", "nE7jA%5m",
+                         "cqunicom","1620@CTCC", "1620@CUcc", "admintelecom", "cuadmin", "lnadmin",
+                        "pONjA%5m"])
     parser.add_argument('--ip', help='route ip', default="192.168.1.1")
     parser.add_argument('--port', help='router http port', type=int, default=80)
     parser.add_argument('--new', dest='new_method', action='store_true',
@@ -616,10 +635,17 @@ def parseArgs():
                                    'a temp telnet login is verified')
     telnet_group.add_argument('--telnet-restart', action='store_true',
                               help='permanent telnet (user: root, pass: Zte521) applied by rebooting the device')
+    parser.add_argument('--telnet-user', default='root',
+                        help='permanent Telnet username (separate from factory-mode --user)')
+    parser.add_argument('--telnet-pass', default='Zte521',
+                        help='permanent Telnet password (separate from factory-mode --pass)')
     parser.add_argument('--tp', help='router telnet port', type=int, default=23)
+    # A command is required.  Without this, invocations such as
+    # ``--new --mac ...`` select/print the MAC and then silently exit because
+    # ``main`` has no operation to dispatch.
     subparsers = parser.add_subparsers(dest='cmd', title='subcommands',
-                                       description='valid subcommands',
-                                       help='supported commands')
+                                       description='choose one of these commands',
+                                       help='supported commands', required=True)
     telnet_parser = subparsers.add_parser("telnet", help='control telnet services on/off',
                                           formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     telnet_parser.add_argument('action', nargs="?", choices=['open', 'close'], help='action', default='open')
@@ -646,7 +672,8 @@ def main():
     elif args.cmd == 'telnet':
         dealTelnet(args.ip, args.port, args.user, args.pw, args.action,
                    args.new_method, selected_mac, args.tp,
-                   args.telnet, args.telnet_restart, args.sendinfo_profile, args.verbose)
+                   args.telnet, args.telnet_restart, args.sendinfo_profile, args.verbose,
+                   args.telnet_user, args.telnet_pass)
 
 
 if __name__ == '__main__':

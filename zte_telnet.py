@@ -242,7 +242,7 @@ class Telnet:
         out = out[out.index(cmd) + len(cmd):].lstrip("\r\n")
         return out
 
-    def solidify(self):
+    def solidify(self, username="root", password="Zte521"):
         """Write the permanent telnet settings to the device DB and save them.
 
         The connection must already be logged in (see login); each command is
@@ -251,15 +251,20 @@ class Telnet:
         safe."""
         prefix = "sendcmd 1 DB set TelnetCfg 0 "
         commands = [
+            prefix + "TS_Enable 1",
             prefix + "Lan_Enable 1",
-            prefix + "TS_UName root",
-            prefix + "TS_UPwd Zte521",
-            prefix + "TSLan_UName root",
-            prefix + "TSLan_UPwd Zte521",
-            prefix + "Max_Con_Num 3",
+            prefix + "TS_UName " + username,
+            prefix + "TS_UPwd " + password,
+            prefix + "TSLan_UName " + username,
+            prefix + "TSLan_UPwd " + password,
+            prefix + "Max_Con_Num 99",
+            prefix + "ExitTime 999999",
+            prefix + "CloseServerTime 9999999",
+            prefix + "Lan_EnableAfterOlt 1",
             prefix + "InitSecLvl 3",
             # save DB
             "sendcmd 1 DB save",
+            "sendcmd 1 DB recsave",
         ]
         for cmd in commands:
             self._send_cmd(cmd)
