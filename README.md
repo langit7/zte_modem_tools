@@ -94,7 +94,9 @@ persist Telnet credentials, but cannot persist the developer shell mode through
 `TelnetCfg`.
 
 Permanent settings are written only after the tool successfully logs in with
-the temporary credentials.
+the temporary credentials. They are written only when every `CountryCode`
+value in the modem's `WLANBase` table is `198`; other country codes are refused
+so the tool does not claim to enable a setting that will be lost after reboot.
 
 ### Close Telnet
 

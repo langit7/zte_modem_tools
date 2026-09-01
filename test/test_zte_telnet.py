@@ -1,7 +1,7 @@
 import unittest
 
 from zte_telnet import TelnetError, filter_telnet, parse_temp_credentials
-from zte_telnet import _parse_telnetd_pid
+from zte_telnet import _parse_country_codes, _parse_telnetd_pid
 
 
 class FilterTelnetTests(unittest.TestCase):
@@ -44,6 +44,15 @@ class ParseTelnetdPidTests(unittest.TestCase):
     def test_invalid_pid_raises(self):
         with self.assertRaises(ValueError):
             _parse_telnetd_pid(self._table("abc"))
+
+
+class ParseCountryCodeTests(unittest.TestCase):
+    def test_parses_country_codes_from_wlan_base(self):
+        output = '<DM name="CountryCode" val="198"/>\n<DM name="CountryCode" val="198"/>'
+        self.assertEqual(["198", "198"], _parse_country_codes(output))
+
+    def test_missing_country_code_is_empty(self):
+        self.assertEqual([], _parse_country_codes('<DM name="SSID" val="wifi"/>'))
 
 
 class ParseTempCredentialsTests(unittest.TestCase):

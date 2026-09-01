@@ -29,6 +29,9 @@ REBOOT_CLOSE_TIMEOUT = 12.0
 # announces that the kill took effect and pc has taken over respawning.
 RESTART_CLOSE_TIMEOUT = 12.0
 
+# Permanent Telnet survives a reboot only on the supported modem region.
+ALLOWED_PERMANENT_TELNET_COUNTRY_CODE = "198"
+
 # ctrl terminates every command line sent to the device shell.
 CTRL = "\r\n"
 
@@ -90,6 +93,15 @@ def _parse_telnetd_pid(out):
             except ValueError:
                 raise ValueError("invalid telnetd pid %r" % fields[2])
     raise RuntimeError("telnetd not found in `sendcmd -pc show` output")
+
+
+def _parse_country_codes(out):
+    """Extract CountryCode values from a printed WLANBase DB table."""
+    return re.findall(
+        r'<DM\s+name=["\']CountryCode["\']\s+val=["\']([^"\']+)["\']',
+        out,
+        flags=re.IGNORECASE,
+    )
 
 
 class TelnetError(Exception):
@@ -249,6 +261,18 @@ class Telnet:
         confirmed by the shell prompt, and the prompt after "DB save" means
         the flash write has finished, which is what makes the later reboot
         safe."""
+        wlan_base = self.run_output("sendcmd 1 DB p WLANBase")
+        country_codes = _parse_country_codes(wlan_base)
+        if not country_codes:
+            raise TelnetError(
+                "WLANBase has no CountryCode; refusing to enable permanent Telnet"
+            )
+        if any(code != ALLOWED_PERMANENT_TELNET_COUNTRY_CODE for code in country_codes):
+            raise TelnetError(
+                "permanent Telnet requires CountryCode %s (found %s)"
+                % (ALLOWED_PERMANENT_TELNET_COUNTRY_CODE, ", ".join(country_codes))
+            )
+
         prefix = "sendcmd 1 DB set TelnetCfg 0 "
         commands = [
             prefix + "TS_Enable 1",
