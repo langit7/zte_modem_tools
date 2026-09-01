@@ -584,12 +584,15 @@ def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot,
         verify.login()
         output = verify.run_output("sendcmd 1 DB p TelnetCfg")
         if "access denied" in output.lower():
-            raise TelnetError("Telnet login succeeded but shell commands are still denied")
+            raise TelnetError(
+                "Telnet login accepted, but shell commands are denied; "
+                "this firmware does not persist the developer shell privilege"
+            )
     except (TelnetError, OSError) as error:
         print("permanent telnet verification failed:", error)
     else:
-        print("permanent telnet verified after reboot" if reboot
-              else "permanent telnet verified after in-place restart")
+        print("permanent Telnet login verified" +
+              (" after reboot" if reboot else " after in-place restart"))
     finally:
         if verify:
             verify.close()

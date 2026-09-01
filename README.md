@@ -77,7 +77,7 @@ rebooting the device:
 python3 zte_factroymode.py --telnet telnet open
 ```
 
-Save the same credentials and reboot the device to apply them:
+Save the same credentials and reboot the device to apply the login settings:
 
 ```bash
 python3 zte_factroymode.py --telnet-restart telnet open
@@ -85,8 +85,13 @@ python3 zte_factroymode.py --telnet-restart telnet open
 
 Some F6600P firmware does not list `telnetd` in `sendcmd -pc show`, so it
 cannot restart Telnet in place. For that firmware, use the rebooting command
-above. If the in-place command reports that `telnetd` was not found, the DB
-settings may already be saved; rerun with `--telnet-restart` to activate them.
+above to apply the saved login settings.
+
+On firmware where the shell privilege mode is runtime-only, `root / Zte521`
+may authenticate successfully but still receive `Access denied` for shell
+commands after reboot. This is a firmware security limitation: the tool can
+persist Telnet credentials, but cannot persist the developer shell mode through
+`TelnetCfg`.
 
 Permanent settings are written only after the tool successfully logs in with
 the temporary credentials.
