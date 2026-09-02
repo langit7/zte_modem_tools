@@ -9,6 +9,14 @@ Tools for supported ZTE ONU/ONT devices:
 > Use this only on devices you own or are authorized to manage. Telnet exposes
 > a privileged service on your local network.
 
+## Tested devices
+
+| Device | Tested firmware |
+| --- | --- |
+| F6600P | `V9.0.10P5N23`, `V9.0.10P6N33B` |
+| F6201B | `V9.3.10P4N3` |
+| F670L | `V9.0.11P` |
+
 ## Quick start
 
 Install Python 3, open a terminal in this repository, then create an isolated
