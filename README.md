@@ -65,8 +65,8 @@ python .\zte_factroymode.py telnet
 
 ### Make Telnet persistent
 
-Permanent Telnet uses `root` / `Zte521`. It is allowed only when every
-`WLANBase.CountryCode` value is `198`.
+Permanent Telnet uses `root` / `Zte521`. It is allowed only when the firmware
+region code in `/userconfig/flag_type` is `198`.
 
 ```bash
 # Restart telnetd without rebooting.
@@ -74,7 +74,19 @@ python3 zte_factroymode.py --telnet telnet
 
 # Reboot the modem to apply the saved settings.
 python3 zte_factroymode.py --telnet-restart telnet
+
+# If the detected firmware region is not 198, set and verify it first.
+python3 zte_factroymode.py --telnet --set-region-198 telnet
+
+# Set the region code before applying permanent Telnet with a reboot.
+python3 zte_factroymode.py --telnet-restart --set-region-198 telnet
 ```
+
+Without `--set-region-198`, a region other than `198` stops the operation
+before telnetd is restarted or the modem is rebooted. The tool prints the
+suggested command-line option. Region enforcement runs
+`upgradetest sfactoryconf 198` and verifies `/userconfig/flag_type` before
+continuing.
 
 Use `--telnet-restart` if in-place restart fails. Some firmware accepts the
 login after reboot but still denies shell commands; that firmware does not

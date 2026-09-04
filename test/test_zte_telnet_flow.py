@@ -10,12 +10,12 @@ class FakeTelnetd(threading.Thread):
     every shell command with "# "; `sendcmd -pc show` returns a process table,
     `sendcmd -pc kill <pid>` and `reboot` drop the session."""
 
-    def __init__(self, reprompt=False, country_code="198"):
+    def __init__(self, reprompt=False, region="198"):
         super().__init__(daemon=True)
         self.lines = []
         self.killed = threading.Event()
         self.reprompt = reprompt
-        self.country_code = country_code
+        self.region = region
         self.server, self.port = socket_server()
 
     def run(self):
@@ -48,12 +48,12 @@ class FakeTelnetd(threading.Thread):
                         conn.sendall(text.encode("latin-1") + b"\r\n")
                         if text == "sendcmd -pc show":
                             conn.sendall(b"\r\ntelnetd   0x2a  777     0\r\n# ")
-                        elif text == "sendcmd 1 DB p WLANBase":
-                            response = (
-                                '<DM name="CountryCode" val="%s"/>\r\n# '
-                                % self.country_code
-                            )
+                        elif text == "cat /userconfig/flag_type":
+                            response = "current : %s\r\n# " % self.region
                             conn.sendall(response.encode("latin-1"))
+                        elif text == "upgradetest sfactoryconf 198":
+                            self.region = "198"
+                            conn.sendall(b"# ")
                         elif text.startswith("sendcmd -pc kill"):
                             self.killed.set()
                             conn.close()  # killing telnetd drops the session
@@ -129,8 +129,8 @@ class TelnetFlowTests(unittest.TestCase):
         self.assertIn("sendcmd 1 DB save", joined)
         self.assertNotIn("sendcmd 1 DB recsave", joined)
 
-    def test_solidify_refuses_unsupported_country_code(self):
-        unsupported = FakeTelnetd(country_code="77")
+    def test_solidify_refuses_unsupported_region(self):
+        unsupported = FakeTelnetd(region="77")
         unsupported.start()
         import time
 
@@ -145,7 +145,25 @@ class TelnetFlowTests(unittest.TestCase):
             session.close()
         unsupported.join(timeout=3)
         self.assertEqual(["USER:root", "PASS:Zte521",
-                          "sendcmd 1 DB p WLANBase"], unsupported.lines)
+                          "cat /userconfig/flag_type"], unsupported.lines)
+
+    def test_solidify_can_enforce_region_198_before_saving(self):
+        unsupported = FakeTelnetd(region="77")
+        unsupported.start()
+        import time
+
+        time.sleep(0.05)
+        session = Telnet.connect("root", "Zte521", "127.0.0.1",
+                                 unsupported.port, attempts=2, interval=0.05)
+        try:
+            session.login()
+            session.solidify(enforce_region=True)
+        finally:
+            session.close()
+        unsupported.join(timeout=3)
+        self.assertIn("upgradetest sfactoryconf 198", unsupported.lines)
+        self.assertEqual(2, unsupported.lines.count("cat /userconfig/flag_type"))
+        self.assertIn("sendcmd 1 DB save", unsupported.lines)
 
     def test_restart_telnetd_kills_parsed_pid(self):
         session = self._connect("root", "Zte521")

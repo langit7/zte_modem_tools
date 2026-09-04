@@ -30,7 +30,7 @@ REBOOT_CLOSE_TIMEOUT = 12.0
 RESTART_CLOSE_TIMEOUT = 12.0
 
 # Permanent Telnet survives a reboot only on the supported modem region.
-ALLOWED_PERMANENT_TELNET_COUNTRY_CODE = "198"
+PERMANENT_TELNET_REGION = "198"
 
 # ctrl terminates every command line sent to the device shell.
 CTRL = "\r\n"
@@ -83,29 +83,41 @@ def _truncate(s, n=128):
 
 
 def _parse_telnetd_pid(out):
-    """Extract the current telnetd pid from a `sendcmd -pc show` table,
-    which has the columns "Name APPID pid inst ..."."""
+    """Extract the current telnetd PID from process-manager output.
+
+    Firmware variants print either a table with ``telnetd`` as the first
+    column, or a grep-friendly process line such as ``1299 ... telnetd ...``.
+    """
     for line in out.splitlines():
         fields = line.split()
-        if len(fields) >= 3 and fields[0] == "telnetd":
-            try:
-                return int(fields[2])
-            except ValueError:
-                raise ValueError("invalid telnetd pid %r" % fields[2])
+        if not fields or "telnetd" not in fields:
+            continue
+        if fields[0] == "telnetd" and len(fields) >= 3:
+            pid_field = fields[2]
+        elif fields[0].isdigit():
+            # `sendcmd -pc show|grep telnetd`: PID is the first column.
+            pid_field = fields[0]
+        else:
+            continue
+        try:
+            return int(pid_field)
+        except ValueError:
+            raise ValueError("invalid telnetd pid %r" % pid_field)
     raise RuntimeError("telnetd not found in `sendcmd -pc show` output")
 
 
-def _parse_country_codes(out):
-    """Extract CountryCode values from a printed WLANBase DB table."""
-    return re.findall(
-        r'<DM\s+name=["\']CountryCode["\']\s+val=["\']([^"\']+)["\']',
-        out,
-        flags=re.IGNORECASE,
-    )
+def _parse_region(out):
+    """Extract the firmware region code from ``flag_type`` output."""
+    match = re.search(r'\bcurrent\s*:\s*(\d+)\b', out, flags=re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 class TelnetError(Exception):
     pass
+
+
+class RegionError(TelnetError):
+    """The firmware region is unavailable or unsuitable for permanent Telnet."""
 
 
 class Telnet:
@@ -254,24 +266,54 @@ class Telnet:
         out = out[out.index(cmd) + len(cmd):].lstrip("\r\n")
         return out
 
-    def solidify(self, username="root", password="Zte521"):
+    def solidify(self, username="root", password="Zte521", enforce_region=False):
         """Write the permanent telnet settings to the device DB and save them.
 
         The connection must already be logged in (see login); each command is
         confirmed by the shell prompt, and the prompt after "DB save" means
         the flash write has finished, which is what makes the later reboot
         safe."""
-        wlan_base = self.run_output("sendcmd 1 DB p WLANBase")
-        country_codes = _parse_country_codes(wlan_base)
-        if not country_codes:
-            raise TelnetError(
-                "WLANBase has no CountryCode; refusing to enable permanent Telnet"
+        try:
+            region = _parse_region(
+                self.run_output("cat /userconfig/flag_type")
             )
-        if any(code != ALLOWED_PERMANENT_TELNET_COUNTRY_CODE for code in country_codes):
-            raise TelnetError(
-                "permanent Telnet requires CountryCode %s (found %s)"
-                % (ALLOWED_PERMANENT_TELNET_COUNTRY_CODE, ", ".join(country_codes))
+        except TelnetError:
+            region = None
+        if region is None:
+            raise RegionError(
+                "firmware region code is unavailable; refusing to enable permanent Telnet"
             )
+        if region != PERMANENT_TELNET_REGION:
+            if not enforce_region:
+                raise RegionError(
+                    "permanent Telnet requires firmware region %s (found %s)"
+                    % (PERMANENT_TELNET_REGION, region)
+                )
+
+            command = "upgradetest sfactoryconf %s" % PERMANENT_TELNET_REGION
+            try:
+                output = self.run_output(command)
+            except TelnetError as error:
+                raise RegionError("could not set firmware region: %s" % error)
+            lowered = output.lower()
+            if any(word in lowered for word in
+                   ("access denied", "error", "failed", "invalid", "not found")):
+                raise RegionError(
+                    "firmware region command returned an error: %s" % output.strip()
+                )
+
+            try:
+                region = _parse_region(
+                    self.run_output("cat /userconfig/flag_type")
+                )
+            except TelnetError:
+                region = None
+            if region != PERMANENT_TELNET_REGION:
+                found = region if region is not None else "unavailable"
+                raise RegionError(
+                    "firmware region was not changed to %s (found %s)"
+                    % (PERMANENT_TELNET_REGION, found)
+                )
 
         prefix = "sendcmd 1 DB set TelnetCfg 0 "
         commands = [

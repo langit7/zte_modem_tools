@@ -14,7 +14,7 @@ from zte_payload import (
     mac_to_magic_bytes,
     mac_to_rerand34_magic_bytes,
 )
-from zte_telnet import Telnet, TelnetError, parse_temp_credentials
+from zte_telnet import RegionError, Telnet, TelnetError, parse_temp_credentials
 
 
 def pad(data_to_pad, block_size):
@@ -392,9 +392,9 @@ class WebFacTelnet(WebFac):
         super().__init__(ip, port, user, pw, new_method, selected_mac,
                          sendinfo_profile, verbose)
 
-    def factoryMode(self, action):
+    def factoryMode(self, action, requested_user=None):
         try:
-            command = self.factoryModeCommand(action)
+            command = self.factoryModeCommand(action, requested_user)
             resp = self._post('/webFacEntry',
                               self.cipher.encrypt(pad(command, 16)), command)
             # print(repr(resp.text))
@@ -416,16 +416,18 @@ class WebFacTelnet(WebFac):
             print(e)
         return False
 
-    def factoryModeCommand(self, action):
+    def factoryModeCommand(self, action, requested_user=None):
         if action == 'close':
             return b'FactoryMode.gch?close'
         if not self.new_method:
             # The analyzed handler accepts values 0..2; this client requests 2.
-            return b'FactoryMode.gch?mode=2&user=notused'
+            user = requested_user or 'notused'
+            return ('FactoryMode.gch?mode=2&user=' + user).encode()
         if self.auth_time is None:
             raise ValueError("new factory mode requires a completed authentication step")
         mode_time = SystemRandom().randint(self.auth_time, 999)
-        return f'FactoryMode.gch?time{mode_time}&mode=2&user=notused'.encode()
+        user = requested_user or 'notused'
+        return f'FactoryMode.gch?time{mode_time}&mode=2&user={user}'.encode()
 
 
 def dealFacAuth(Class: WebFac, ip, port, users, pws, new_method=False, selected_mac=None,
@@ -506,7 +508,7 @@ def dealSerial(ip, port, users, pws, action, new_method=False, selected_mac=None
 def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None,
                telnet_port=23, telnet=None, telnet_restart=False,
                sendinfo_profile="rerand34", verbose=False,
-               telnet_user="root", telnet_pass="Zte521"):
+               telnet_user="root", telnet_pass="Zte521", enforce_region=False):
     webfac = dealFacAuth(
         WebFacTelnet, ip, port, users, pws, new_method, selected_mac,
         sendinfo_profile, verbose
@@ -516,7 +518,10 @@ def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None
         return
 
     print("facStep 5:")
-    url = webfac.factoryMode(action)
+    # Prefer the permanent account in permanent modes. Older firmware may
+    # ignore this and return temporary credentials, handled as a fallback.
+    requested_user = telnet_user if (telnet_restart or telnet) else None
+    url = webfac.factoryMode(action, requested_user)
     if action == 'close':
         if url is True:
             print("OK!\nTelnet closed")
@@ -526,39 +531,67 @@ def dealTelnet(ip, port, users, pws, action, new_method=False, selected_mac=None
     print("OK!\n")
     print(repr(url))
 
-    # The HTTP flow returns credentials even when the MAC is not honored, so
-    # the run only succeeds if the credentials actually log in over telnet.
-    try:
-        tl_user, tl_pass = parse_temp_credentials(url if isinstance(url, str) else url.decode())
-        print(f"temp user: {tl_user}, pass: {tl_pass}")
-        session = Telnet.connect(tl_user, tl_pass, ip, telnet_port)
-    except (TelnetError, ValueError) as error:
-        print("telnet verification failed:", error)
-        return
-    try:
+    # Permanent modes should use the requested permanent account first.  This
+    # avoids consuming the modem's single temporary Telnet slot when it is
+    # already enabled.  Factory credentials remain a compatibility fallback
+    # for devices that do not yet accept the permanent account.
+    response_text = url if isinstance(url, str) else url.decode()
+    temp_credentials = None
+    if telnet_restart or telnet:
+        credential_candidates = [(telnet_user, telnet_pass, False)]
         try:
-            session.login()
-        except TelnetError as error:
+            temp_credentials = parse_temp_credentials(response_text)
+        except (TelnetError, ValueError):
+            pass
+        if temp_credentials:
+            credential_candidates.append((*temp_credentials, True))
+    else:
+        try:
+            temp_credentials = parse_temp_credentials(response_text)
+        except (TelnetError, ValueError) as error:
             print("telnet verification failed:", error)
             return
+        credential_candidates = [(*temp_credentials, True)]
+
+    session = None
+    last_error = None
+    for candidate_user, candidate_pass, is_temp in credential_candidates:
+        candidate = None
+        try:
+            candidate = Telnet.connect(candidate_user, candidate_pass, ip, telnet_port)
+            candidate.login()
+            session = candidate
+            if is_temp:
+                print(f"temp user: {candidate_user}, pass: {candidate_pass}")
+            break
+        except (TelnetError, OSError) as error:
+            last_error = error
+            if candidate is not None:
+                candidate.close()
+    if session is None:
+        print("telnet verification failed:", last_error)
+        return
+    try:
         print("-" * 35)
-        print("telnet verified, temp factory telnet is open")
+        print("telnet verified" + (", temp factory telnet is open" if is_temp else ""))
 
         if telnet_restart:
             apply_permanent_telnet(session, ip, telnet_port, reboot=True,
-                                   username=telnet_user, password=telnet_pass)
+                                   username=telnet_user, password=telnet_pass,
+                                   enforce_region=enforce_region)
         elif telnet:
             apply_permanent_telnet(session, ip, telnet_port, reboot=False,
-                                   username=telnet_user, password=telnet_pass)
+                                   username=telnet_user, password=telnet_pass,
+                                   enforce_region=enforce_region)
     finally:
         session.close()
 
 
 def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot,
-                           username="root", password="Zte521"):
+                           username="root", password="Zte521", enforce_region=False):
     """Write persistent Telnet settings and verify command authorization."""
     try:
-        telnet_session.solidify(username, password)
+        telnet_session.solidify(username, password, enforce_region=enforce_region)
         print(f"Permanent Telnet saved\r\nuser: {username}, pass: {password}")
 
         if reboot:
@@ -568,6 +601,12 @@ def apply_permanent_telnet(telnet_session, ip, telnet_port, reboot,
         else:
             print("restarting telnetd in place (no reboot)..")
             telnet_session.restart_telnetd()
+    except RegionError as error:
+        print("permanent Telnet was not activated:", error)
+        print("Telnet was not restarted or rebooted because firmware region 198 was not verified.")
+        if not enforce_region:
+            print("Rerun with --set-region-198 to apply: upgradetest sfactoryconf 198")
+        return
     except (TelnetError, ValueError, RuntimeError) as error:
         print("permanent Telnet was not activated:", error)
         if not reboot:
@@ -636,14 +675,19 @@ def parseArgs():
     telnet_group = parser.add_mutually_exclusive_group()
     telnet_group.add_argument('--telnet', action='store_true',
                               help='permanent telnet (user: root, pass: Zte521) applied by restarting '
-                                   'the telnetd service in place, without rebooting; only applied after '
-                                   'a temp telnet login is verified')
+                                   'the telnetd service in place, without rebooting; uses the permanent '
+                                   'account first and falls back to factory credentials when needed')
     telnet_group.add_argument('--telnet-restart', action='store_true',
-                              help='permanent telnet (user: root, pass: Zte521) applied by rebooting the device')
+                              help='permanent telnet (user: root, pass: Zte521) applied by rebooting the device; '
+                                   'uses the permanent account first and falls back to factory credentials when needed')
     parser.add_argument('--telnet-user', default='root',
                         help='permanent Telnet username (separate from factory-mode --user)')
     parser.add_argument('--telnet-pass', default='Zte521',
                         help='permanent Telnet password (separate from factory-mode --pass)')
+    parser.add_argument('--set-region-198', action='store_true',
+                        help='when permanent Telnet is requested and the firmware region is not 198, '
+                             'run "upgradetest sfactoryconf 198" and verify /userconfig/flag_type '
+                             'before restarting or rebooting')
     parser.add_argument('--tp', help='router telnet port', type=int, default=23)
     # A command is required.  Without this, invocations such as
     # ``--new --mac ...`` select/print the MAC and then silently exit because
@@ -678,7 +722,7 @@ def main():
         dealTelnet(args.ip, args.port, args.user, args.pw, args.action,
                    args.new_method, selected_mac, args.tp,
                    args.telnet, args.telnet_restart, args.sendinfo_profile, args.verbose,
-                   args.telnet_user, args.telnet_pass)
+                   args.telnet_user, args.telnet_pass, args.set_region_198)
 
 
 if __name__ == '__main__':
