@@ -16,6 +16,7 @@ Tools for supported ZTE ONU/ONT devices:
 | F6600P | `V9.0.10P5N23`, `V9.0.10P6N33B` |
 | F6201B | `V9.3.10P4N3` |
 | F670L | `V9.0.11P` |
+| ZXHN G7615TV2-XE | `V3.1.0P1T1` ([Wuhan Telecom temporary-Telnet case](docs/g7615tv2-xe-wuhan-telecom.md); persistence not verified) |
 
 ## Quick start
 
