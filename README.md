@@ -1,60 +1,173 @@
-# ENV
+# ZTE Modem Tools
 
-```
+Tools for supported ZTE ONU/ONT devices:
+
+- Open or close factory-mode Telnet.
+- Enable `/proc/serial`.
+- Decrypt ZTE `hardcodefile` configuration files.
+
+> Use this only on devices you own or are authorized to manage. Telnet exposes
+> a privileged service on your local network.
+
+## Tested devices
+
+| Device | Tested firmware |
+| --- | --- |
+| F6600P | `V9.0.10P5N23`, `V9.0.10P6N33B` |
+| F6201B | `V9.3.10P4N3` |
+| F670L | `V9.0.11P` |
+| ZXHN G7615TV2-XE | `V3.1.0P1T1` ([Wuhan Telecom temporary-Telnet case](docs/g7615tv2-xe-wuhan-telecom.md); persistence not verified) |
+
+## Quick start
+
+Install Python 3, open a terminal in this repository, then create an isolated
+environment and install the dependencies.
+
+Linux/macOS:
+
+```bash
 python3 -m venv .venv
-source ./.venv/bin/activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-# zte_factroymode.py
+Windows PowerShell:
 
-open telnet(use embed user/pass to 192.168.1.1 80):
-
-`python3 zte_factroymode.py telnet`
-
-or custom args
-
-`python3 zte_factroymode.py --user CUAdmin --pass CUAdmin --ip 192.168.1.1 --port 80 telnet open`
-
-```shell
-$ python3 ./zte_factroymode.py -h
-usage: zte_factroymode [-h] [--user USER [USER ...]] [--pass PASS [PASS ...]] [--ip IP] [--port PORT] {telnet,serial} ...
-
-options:
-  -h, --help            show this help message and exit
-  --user USER [USER ...], -u USER [USER ...]
-                        factorymode auth username (default: ['factorymode', 'CMCCAdmin', 'CUAdmin', 'telecomadmin', 'cqadmin', 'user', 'admin', 'cuadmin', 'lnadmin', 'useradmin'])
-  --pass PASS [PASS ...], -p PASS [PASS ...]
-                        factorymode auth password (default: ['nE%jA@5b', 'aDm8H%MdA', 'CUAdmin', 'nE7jA%5m', 'cqunicom', '1620@CTCC', '1620@CUcc', 'admintelecom', 'cuadmin', 'lnadmin'])
-  --ip IP               route ip (default: 192.168.1.1)
-  --port PORT           router http port (default: 80)
-
-subcommands:
-  valid subcommands
-
-  {telnet,serial}       supported commands
-    telnet              control telnet services on/off
-    serial              control /proc/serial on/off
-
-https://github.com/douniwan5788/zte_modem_tools
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-# zte_hardcode_dump.py
+Windows Command Prompt:
 
-decrypt /etc/hardcodefile
-
-`./zte_hardcode_dump.py test/hardcode test/hardcodefile/*`
-
-```shell
-$ python3 ./zte_hardcode_dump.py -h
-usage: zte_hardcode_dump [-h] hardcode hardcodefile [hardcodefile ...]
-
-positional arguments:
-  hardcode      the /etc/hardcode file which contains root key
-  hardcodefile  config files under /etc/hardcodefile
-
-options:
-  -h, --help    show this help message and exit
-
-https://github.com/douniwan5788/zte_modem_tools
+```bat
+py -3 -m venv .venv
+.venv\Scripts\activate.bat
+python -m pip install -r requirements.txt
 ```
+
+## Telnet
+
+### Open temporary Telnet
+
+This uses the default modem address (`192.168.1.1`) and ports (HTTP `80`,
+Telnet `23`). A successful run prints temporary Telnet credentials.
+
+```bash
+python3 zte_factroymode.py telnet
+```
+
+On Windows, use `python` instead of `python3`:
+
+```powershell
+python .\zte_factroymode.py telnet
+```
+
+### Make Telnet persistent
+
+Permanent Telnet uses `root` / `Zte521`. It is allowed only when the firmware
+region code in `/userconfig/flag_type` is `198`.
+
+```bash
+# Restart telnetd without rebooting.
+python3 zte_factroymode.py --telnet telnet
+
+# Reboot the modem to apply the saved settings.
+python3 zte_factroymode.py --telnet-restart telnet
+
+# If the detected firmware region is not 198, set and verify it first.
+python3 zte_factroymode.py --telnet --set-region-198 telnet
+
+# Set the region code before applying permanent Telnet with a reboot.
+python3 zte_factroymode.py --telnet-restart --set-region-198 telnet
+```
+
+Without `--set-region-198`, a region other than `198` stops the operation
+before telnetd is restarted or the modem is rebooted. The tool prints the
+suggested command-line option. Region enforcement runs
+`upgradetest sfactoryconf 198` and verifies `/userconfig/flag_type` before
+continuing.
+
+Use `--telnet-restart` if in-place restart fails. Some firmware accepts the
+login after reboot but still denies shell commands; that firmware does not
+persist developer-shell privilege.
+
+### Close Telnet
+
+```bash
+python3 zte_factroymode.py telnet close
+```
+
+## Common options
+
+Put options before `telnet` or `serial`.
+
+```bash
+# Different modem address or ports.
+python3 zte_factroymode.py --ip 192.168.1.1 --port 8080 --tp 23 telnet
+
+# Try a specific factory-mode login.
+python3 zte_factroymode.py --user CUAdmin --pass CUAdmin telnet
+
+# Provide the MAC address visible to the modem (especially on Windows).
+python3 zte_factroymode.py --mac YOUR-MAC-ADDRESS telnet
+```
+
+Newer firmware may bind authentication to the client MAC. On Linux, the tool
+normally detects it automatically; use `--iface eth0` to choose an interface.
+On Windows, provide `--mac`. The MAC must be the layer-2 address the modem
+actually sees; it is not spoofed or changed by this tool.
+
+For older method-3 firmware, try the compatibility profile:
+
+```bash
+python3 zte_factroymode.py --sendinfo-profile rerand22 telnet
+```
+
+Use `--new` only for firmware that requires its historical time-qualified
+authentication form. Protocol generation is detected automatically.
+
+## Serial control
+
+```bash
+python3 zte_factroymode.py serial open
+python3 zte_factroymode.py serial close
+```
+
+## Troubleshooting
+
+- Add `-v` before the subcommand for diagnostics, for example
+  `python3 zte_factroymode.py -v telnet`. Do not share its output without
+  removing credentials.
+- If authentication works but Telnet does not open, retry with `--mac` or
+  `--iface`. This is common through bridges, repeaters, VMs, or Wi-Fi links.
+- If a failed F6201B attempt used invalid headers, reboot the modem before
+  retrying; its HTTP service can retain the failed state.
+- Run `python3 zte_factroymode.py --help` for every option.
+
+## Decrypt hardcode files
+
+Copy `/etc/hardcode` and `/etc/hardcodefile` from the modem, then run:
+
+```bash
+python3 zte_hardcode_dump.py /path/to/hardcode /path/to/hardcodefile/*
+```
+
+The input can be a file, folder, or wildcard. Decrypted files are written next
+to their inputs with a `.txt` suffix. Try the included sample with:
+
+```bash
+python3 zte_hardcode_dump.py test/hardcode test/hardcodefile
+```
+
+## Tests
+
+```bash
+python3 -m unittest discover -s test -v
+```
+
+## License
+
+Distributed under the [MIT License](LICENSE). Based on
+[douniwan5788/zte_modem_tools](https://github.com/douniwan5788/zte_modem_tools).
